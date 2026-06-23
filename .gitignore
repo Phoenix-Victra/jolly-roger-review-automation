@@ -1,0 +1,27 @@
+# Secrets & credentials — never commit these
+.env
+*.token
+token.json
+client_secret*.json
+google_oauth_credentials.json
+
+# Local database
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

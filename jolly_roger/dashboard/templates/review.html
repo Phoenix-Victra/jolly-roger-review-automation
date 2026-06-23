@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+  <p><a href="{{ url_for('index') }}">← back</a></p>
+  {% if error %}<p class="error">Could not post: {{ error }}</p>{% endif %}
+
+  <div class="card">
+    <p>
+      <span class="stars">{{ "★" * review.star_rating }}{{ "☆" * (5 - review.star_rating) }}</span>
+      <strong>{{ review.author }}</strong>
+      <span class="muted">{{ review.created_at }}</span>
+    </p>
+    {% if review.needs_human %}
+      <p class="flag">⚠ Needs a human: {{ review.flag_reason }}</p>
+    {% endif %}
+    <p><em>{{ review.comment or "(no comment)" }}</em></p>
+  </div>
+
+  {% if review.status in ["new", "drafted"] %}
+    <form method="post" action="{{ url_for('approve', review_id=review.review_id) }}">
+      <p><strong>Suggested reply</strong> (edit before approving if you like):</p>
+      <textarea name="reply">{{ review.draft_reply or "" }}</textarea>
+      <p>
+        <button class="approve" type="submit">Approve &amp; post</button>
+      </p>
+    </form>
+    <form method="post" action="{{ url_for('reject', review_id=review.review_id) }}">
+      <button class="reject" type="submit">Reject (no reply)</button>
+    </form>
+  {% else %}
+    <p class="muted">Status: {{ review.status }}</p>
+    {% if review.final_reply %}<p class="draft">{{ review.final_reply }}</p>{% endif %}
+  {% endif %}
+{% endblock %}

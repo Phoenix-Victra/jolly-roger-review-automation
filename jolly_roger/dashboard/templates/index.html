@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Awaiting approval ({{ pending|length }})</h2>
+  {% if not pending %}<p class="muted">Nothing pending. 🎉</p>{% endif %}
+  {% for r in pending %}
+    <div class="card">
+      <p>
+        <span class="stars">{{ "★" * r.star_rating }}{{ "☆" * (5 - r.star_rating) }}</span>
+        <strong>{{ r.author }}</strong>
+        <span class="muted">{{ r.created_at }}</span>
+      </p>
+      {% if r.needs_human %}<p class="flag">⚠ Needs a human: {{ r.flag_reason }}</p>{% endif %}
+      <p><em>{{ r.comment or "(no comment)" }}</em></p>
+      <p><a href="{{ url_for('review_detail', review_id=r.review_id) }}">Review &amp; reply →</a></p>
+    </div>
+  {% endfor %}
+
+  <h2>Recently handled ({{ done|length }})</h2>
+  {% for r in done %}
+    <div class="card">
+      <p>
+        <span class="stars">{{ "★" * r.star_rating }}{{ "☆" * (5 - r.star_rating) }}</span>
+        <strong>{{ r.author }}</strong>
+        <span class="muted">— {{ r.status }}</span>
+      </p>
+      {% if r.final_reply %}<p class="draft">{{ r.final_reply }}</p>{% endif %}
+    </div>
+  {% endfor %}
+{% endblock %}

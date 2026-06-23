@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from .config import Config
 from .db import STATUS_DRAFTED, Database, Review
 from .drafting import Drafter
-from .email_digest import send_digest
+from .email_digest import send_digest, send_manager_alert
 from .google_client import GoogleBusinessClient
 
 log = logging.getLogger("jolly_roger.poller")
@@ -24,6 +24,7 @@ class PollResult:
     drafted: int
     flagged: int
     digest_sent: bool
+    manager_alerted: bool
 
 
 def run_poll(
@@ -45,17 +46,24 @@ def run_poll(
         log.info("new review %s (%d★) by %s",
                  review.review_id, review.star_rating, review.author)
 
-    # 2. Draft a reply for each new review and flag sensitive ones.
+    # Past approved replies become few-shot examples so good-review drafts
+    # match the voice we've already established.
+    examples = db.list_examples(config.example_count) if config else []
+
+    # 2. Draft a reply for each new review and flag sensitive ones. Split into
+    #    "good" (digest for approval) and "bad" (routed to the manager).
     flagged = 0
+    good: list[Review] = []
+    bad: list[Review] = []
     for review in new_reviews:
-        result = drafter.draft(review)
+        result = drafter.draft(review, examples)
         db.save_draft(
             review.review_id,
             result.draft_reply,
             result.needs_human,
             result.flag_reason or None,
         )
-        # Reflect the draft back onto the in-memory object for the digest.
+        # Reflect the draft back onto the in-memory object for the emails.
         review.draft_reply = result.draft_reply
         review.needs_human = result.needs_human
         review.flag_reason = result.flag_reason
@@ -63,18 +71,26 @@ def run_poll(
         if result.needs_human:
             flagged += 1
 
-    # 3. Send the digest (only the reviews from this run).
-    digest_sent = send_digest(config, new_reviews)
+        max_stars = config.bad_review_max_stars if config else 2
+        if review.star_rating <= max_stars or review.needs_human:
+            bad.append(review)
+        else:
+            good.append(review)
+
+    # 3. Route: good reviews → owner digest, bad reviews → manager.
+    digest_sent = send_digest(config, good) if good else False
+    manager_alerted = send_manager_alert(config, bad) if bad else False
 
     log.info(
-        "poll complete: %d new, %d drafted, %d flagged, digest_sent=%s",
-        len(new_reviews), len(new_reviews), flagged, digest_sent,
+        "poll complete: %d new, %d flagged, %d good→digest, %d bad→manager",
+        len(new_reviews), flagged, len(good), len(bad),
     )
     return PollResult(
         new_reviews=len(new_reviews),
         drafted=len(new_reviews),
         flagged=flagged,
         digest_sent=digest_sent,
+        manager_alerted=manager_alerted,
     )
 
 

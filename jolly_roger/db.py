@@ -129,6 +129,24 @@ class Database:
             )
             return [Review.from_row(r) for r in cur.fetchall()]
 
+    def list_examples(self, limit: int = 5) -> list[Review]:
+        """Recent reviews whose replies we actually posted.
+
+        These human-approved replies are the few-shot examples the drafter
+        learns the established house voice from.
+        """
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                SELECT * FROM reviews
+                 WHERE status = ? AND final_reply IS NOT NULL AND final_reply != ''
+                 ORDER BY posted_at DESC
+                 LIMIT ?
+                """,
+                (STATUS_POSTED, limit),
+            )
+            return [Review.from_row(r) for r in cur.fetchall()]
+
     def list_all(self) -> list[Review]:
         with self._connect() as conn:
             cur = conn.execute(

@@ -53,6 +53,9 @@ class Config:
     smtp_password: str
     digest_from: str
     digest_to: str
+    manager_to: str
+    bad_review_max_stars: int
+    example_count: int
     dashboard_base_url: str
 
     # Storage
@@ -75,6 +78,9 @@ class Config:
             smtp_password=os.getenv("SMTP_PASSWORD", ""),
             digest_from=os.getenv("DIGEST_FROM", "jolly-roger-bot@example.com"),
             digest_to=os.getenv("DIGEST_TO", ""),
+            manager_to=os.getenv("MANAGER_TO", ""),
+            bad_review_max_stars=int(os.getenv("BAD_REVIEW_MAX_STARS", "2")),
+            example_count=int(os.getenv("EXAMPLE_COUNT", "5")),
             dashboard_base_url=os.getenv(
                 "DASHBOARD_BASE_URL", "http://localhost:5000"
             ),

@@ -61,14 +61,41 @@ class Drafter:
         self._model = config.draft_model
         self._tone_prompt = load_tone_prompt()
 
-    def draft(self, review: Review) -> DraftResult:
-        """Generate a draft reply and human-needed flag for one review."""
+    @staticmethod
+    def _format_examples(examples: list[Review] | None) -> str:
+        """Render past review→reply pairs as few-shot context, or empty string."""
+        if not examples:
+            return ""
+        blocks = ["Here are replies we've posted before. Match their voice:\n"]
+        for ex in examples:
+            blocks.append(
+                f"--- Past review ({ex.star_rating}/5): "
+                f"{ex.comment or '(no comment)'}\n"
+                f"Our reply: {ex.final_reply}\n"
+            )
+        return "\n".join(blocks) + "\n"
+
+    def draft(
+        self, review: Review, examples: list[Review] | None = None
+    ) -> DraftResult:
+        """Generate a draft reply and human-needed flag for one review.
+
+        ``examples`` are past reviews plus the replies we actually posted.
+        Passing them lets the model match the house voice we've already
+        established rather than writing from the tone guide alone.
+        """
+        instruction = (
+            "Write a reply following the voice and rules above"
+            + (", matching the style of the example replies" if examples else "")
+            + ", and decide whether this review needs a human."
+        )
         user_content = (
+            f"{self._format_examples(examples)}"
+            f"Now draft a reply for this review.\n\n"
             f"Review by {review.author or 'a guest'} "
             f"({review.star_rating}/5 stars):\n\n"
             f"{review.comment or '(no written comment)'}\n\n"
-            "Write a reply following the voice and rules above, and decide "
-            "whether this review needs a human."
+            f"{instruction}"
         )
 
         response = self._client.messages.create(

@@ -105,6 +105,21 @@ flask --app jolly_roger.dashboard.app run
 Open http://localhost:5000, review each draft, and Approve / Edit / Reject.
 Approval posts the reply to Google and records `final_reply` + `posted_at`.
 
+## Review routing (this branch)
+
+New reviews are split on the way out:
+
+- **Bad reviews → the manager.** Any review at or below `BAD_REVIEW_MAX_STARS`
+  (default 2★), or one Claude flags as needing a human, is emailed straight to
+  `MANAGER_TO` for hands-on handling instead of going into the auto-approval
+  digest. A draft is still included for reference, but the manager decides.
+- **Good reviews → the owner digest, written in our own voice.** For higher-star
+  reviews, the drafter is given the last `EXAMPLE_COUNT` replies we actually
+  posted (from the DB) as few-shot examples, so new drafts match the style of
+  responses we've approved before rather than sounding generic.
+
+Set `MANAGER_TO`, `BAD_REVIEW_MAX_STARS`, and `EXAMPLE_COUNT` in `.env`.
+
 ## Data model (SQLite)
 
 The `reviews` table tracks every review and its status so you never

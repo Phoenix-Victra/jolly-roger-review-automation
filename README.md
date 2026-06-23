@@ -138,6 +138,15 @@ double-process or double-reply:
 - **Don't overwrite an existing reply** — `post_reply` checks Google first.
 - **Secrets stay out of git** — `.env` and tokens are git-ignored.
 
+## TODO / future
+
+- **Possible browser-automation fallback.** The Business Profile API is
+  access-gated (owner grant + Google approval of the access-request form, often
+  days). If approval is slow or denied, evaluate a headless-browser fallback
+  (e.g. Playwright) to read reviews and post approved replies through the
+  Business Profile web UI. Revisit once API access status is known — keep the
+  human-approval step regardless.
+
 ## Tests
 
 ```bash

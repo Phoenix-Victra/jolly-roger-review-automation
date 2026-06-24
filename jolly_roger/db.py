@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     status        TEXT NOT NULL,      -- see STATUS_* constants
     needs_human   INTEGER DEFAULT 0,  -- 1 if flagged sensitive
     flag_reason   TEXT,               -- why it was flagged
+    notified      INTEGER DEFAULT 0,  -- 1 once it's been emailed (digest/manager)
     final_reply   TEXT,               -- what actually got posted
     posted_at     TEXT,
     inserted_at   TEXT DEFAULT (datetime('now')),
@@ -61,6 +62,7 @@ class Review:
     status: str = STATUS_NEW
     needs_human: bool = False
     flag_reason: Optional[str] = None
+    notified: bool = False
     final_reply: Optional[str] = None
     posted_at: Optional[str] = None
 
@@ -76,6 +78,7 @@ class Review:
             status=row["status"],
             needs_human=bool(row["needs_human"]),
             flag_reason=row["flag_reason"],
+            notified=bool(row["notified"]),
             final_reply=row["final_reply"],
             posted_at=row["posted_at"],
         )
@@ -101,6 +104,12 @@ class Database:
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            # Migrate older databases that predate the `notified` column.
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(reviews)")}
+            if "notified" not in cols:
+                conn.execute(
+                    "ALTER TABLE reviews ADD COLUMN notified INTEGER DEFAULT 0"
+                )
 
     # --- reads ---------------------------------------------------------------
 
@@ -144,6 +153,20 @@ class Database:
                  LIMIT ?
                 """,
                 (STATUS_POSTED, limit),
+            )
+            return [Review.from_row(r) for r in cur.fetchall()]
+
+    def list_unnotified(self) -> list[Review]:
+        """Drafted reviews that haven't been emailed yet.
+
+        Lets a later poll re-send anything that was drafted but whose digest /
+        manager email failed (e.g. SMTP was down), so a draft is never stranded.
+        """
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT * FROM reviews WHERE status = ? AND notified = 0 "
+                "ORDER BY created_at ASC",
+                (STATUS_DRAFTED,),
             )
             return [Review.from_row(r) for r in cur.fetchall()]
 
@@ -208,6 +231,17 @@ class Database:
                  WHERE review_id = ?
                 """,
                 (STATUS_POSTED, final_reply, review_id),
+            )
+
+    def mark_notified(self, review_ids: list[str]) -> None:
+        if not review_ids:
+            return
+        placeholders = ",".join("?" for _ in review_ids)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE reviews SET notified = 1, updated_at = datetime('now') "
+                f"WHERE review_id IN ({placeholders})",
+                review_ids,
             )
 
     def set_status(self, review_id: str, status: str) -> None:

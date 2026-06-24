@@ -9,12 +9,16 @@ is always valid JSON we can store directly.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
+from typing import Any
 
 import anthropic
 
 from .config import Config, load_tone_prompt
 from .db import Review
+
+log = logging.getLogger("jolly_roger.drafting")
 
 # JSON schema the model must fill in. additionalProperties:false + required are
 # mandatory for structured outputs.
@@ -56,10 +60,18 @@ class DraftResult:
 class Drafter:
     """Wraps the Anthropic client and the tone/voice system prompt."""
 
-    def __init__(self, config: Config):
-        self._client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+    def __init__(self, config: Config, client: Any | None = None):
+        # `client` is injectable for tests; defaults to a real Anthropic client.
+        self._client = client or anthropic.Anthropic(
+            api_key=config.anthropic_api_key
+        )
         self._model = config.draft_model
         self._tone_prompt = load_tone_prompt()
+
+    @staticmethod
+    def _needs_human(reason: str) -> "DraftResult":
+        """A safe result that routes the review to a human instead of crashing."""
+        return DraftResult(draft_reply="", needs_human=True, flag_reason=reason)
 
     @staticmethod
     def _format_examples(examples: list[Review] | None) -> str:
@@ -98,28 +110,51 @@ class Drafter:
             f"{instruction}"
         )
 
-        response = self._client.messages.create(
-            model=self._model,
-            max_tokens=1024,
-            system=self._tone_prompt,
-            messages=[{"role": "user", "content": user_content}],
-            output_config={
-                "format": {"type": "json_schema", "schema": _DRAFT_SCHEMA}
-            },
-        )
-
-        if response.stop_reason == "refusal":
-            # Don't auto-post anything; hand off to a human.
-            return DraftResult(
-                draft_reply="",
-                needs_human=True,
-                flag_reason="Claude declined to draft a reply for this review.",
+        # Any failure here must route the review to a human, never crash the
+        # poller. We handle: API errors, refusal, truncation, missing text,
+        # and malformed/incomplete JSON.
+        try:
+            response = self._client.messages.create(
+                model=self._model,
+                max_tokens=1024,
+                system=self._tone_prompt,
+                messages=[{"role": "user", "content": user_content}],
+                output_config={
+                    "format": {"type": "json_schema", "schema": _DRAFT_SCHEMA}
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - never let drafting crash the poll
+            log.warning("drafting API error for %s: %s", review.review_id, exc)
+            return self._needs_human(
+                f"Claude API error while drafting: {type(exc).__name__}"
             )
 
-        text = next(b.text for b in response.content if b.type == "text")
-        data = json.loads(text)
-        return DraftResult(
-            draft_reply=data["draft_reply"],
-            needs_human=bool(data["needs_human"]),
-            flag_reason=data.get("flag_reason", ""),
+        stop_reason = getattr(response, "stop_reason", None)
+        if stop_reason == "refusal":
+            return self._needs_human("Claude declined to draft a reply.")
+        if stop_reason == "max_tokens":
+            return self._needs_human(
+                "Claude's reply was cut off (max_tokens); needs a human."
+            )
+
+        text = next(
+            (
+                b.text
+                for b in getattr(response, "content", [])
+                if getattr(b, "type", None) == "text"
+            ),
+            None,
         )
+        if not text:
+            return self._needs_human("Claude returned no text output.")
+
+        try:
+            data = json.loads(text)
+            return DraftResult(
+                draft_reply=str(data["draft_reply"]),
+                needs_human=bool(data["needs_human"]),
+                flag_reason=str(data.get("flag_reason", "")),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            log.warning("could not parse draft for %s: %s", review.review_id, exc)
+            return self._needs_human(f"Could not parse Claude output: {exc}")

@@ -24,7 +24,15 @@
   </style>
 </head>
 <body>
-  <h1><a href="{{ url_for('index') }}">Jolly Roger</a> — Review Replies</h1>
+  <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <h1><a href="{{ url_for('index') }}">Jolly Roger</a> — Review Replies</h1>
+    {% if session.get('authenticated') %}
+      <form method="post" action="{{ url_for('logout') }}" style="margin:0">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="reject" type="submit">Log out</button>
+      </form>
+    {% endif %}
+  </div>
   {% block content %}{% endblock %}
 </body>
 </html>

@@ -1,6 +1,16 @@
 """Poller orchestration test with Google + Claude + email all mocked."""
 
-from jolly_roger.db import STATUS_DRAFTED, STATUS_POSTED, Database, Review
+import smtplib
+
+import pytest
+
+from jolly_roger.db import (
+    STATUS_DRAFTED,
+    STATUS_POSTED,
+    STATUS_SKIPPED,
+    Database,
+    Review,
+)
 from jolly_roger.drafting import DraftResult
 from jolly_roger.google_client import RemoteReview
 from jolly_roger import poller
@@ -104,6 +114,71 @@ def test_run_poll_dedupes(tmp_path, monkeypatch):
     poller.run_poll(config=FakeConfig(), db=db, google=google, drafter=FakeDrafter())
     second = poller.run_poll(config=FakeConfig(), db=db, google=google, drafter=FakeDrafter())
     assert second.new_reviews == 0  # already seen
+
+
+def test_run_poll_skips_already_replied(tmp_path, monkeypatch):
+    routed = {"good": [], "bad": []}
+
+    def fake_digest(cfg, reviews):
+        routed["good"] = [r.review_id for r in reviews]
+        return True
+
+    def fake_alert(cfg, reviews):
+        routed["bad"] = [r.review_id for r in reviews]
+        return True
+
+    monkeypatch.setattr(poller, "send_digest", fake_digest)
+    monkeypatch.setattr(poller, "send_manager_alert", fake_alert)
+
+    db = Database(str(tmp_path / "t.db"))
+    google = FakeGoogle([remote("a", 5), remote("b", 5, has_reply=True)])
+    result = poller.run_poll(
+        config=FakeConfig(), db=db, google=google, drafter=FakeDrafter()
+    )
+
+    assert result.new_reviews == 1
+    assert result.skipped == 1
+    assert db.get("b").status == STATUS_SKIPPED
+    assert db.get("b").draft_reply is None  # never drafted
+    assert routed["good"] == ["a"]  # b not emailed
+
+
+def test_post_reply_missing_remote(tmp_path):
+    db = Database(str(tmp_path / "t.db"))
+    db.insert_new(Review("a", "Pat", 5, "text", "2026-06-20T00:00:00Z"))
+    google = FakeGoogle([remote("other", 5)])  # "a" is not present remotely
+
+    with pytest.raises(RuntimeError, match="not found"):
+        poller.post_reply(db, google, "a", "our reply")
+    assert "a" not in google.posted
+
+
+def test_email_send_failure_retries_next_poll(tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    def flaky_digest(cfg, reviews):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise smtplib.SMTPException("smtp down")
+        return True
+
+    monkeypatch.setattr(poller, "send_digest", flaky_digest)
+    monkeypatch.setattr(poller, "send_manager_alert", lambda cfg, reviews: True)
+
+    db = Database(str(tmp_path / "t.db"))
+    google = FakeGoogle([remote("a", 5)])
+
+    # First poll: drafting succeeds but the digest send fails → not notified.
+    r1 = poller.run_poll(config=FakeConfig(), db=db, google=google, drafter=FakeDrafter())
+    assert r1.digest_sent is False
+    assert db.get("a").status == STATUS_DRAFTED
+    assert db.get("a").notified is False
+
+    # Second poll: no new reviews, but the un-notified draft is retried and sent.
+    r2 = poller.run_poll(config=FakeConfig(), db=db, google=google, drafter=FakeDrafter())
+    assert r2.new_reviews == 0
+    assert r2.digest_sent is True
+    assert db.get("a").notified is True
 
 
 def test_post_reply_refuses_to_overwrite(tmp_path):

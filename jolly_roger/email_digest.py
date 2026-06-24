@@ -89,14 +89,7 @@ def build_message(config: Config, reviews: list[Review]) -> EmailMessage:
     return msg
 
 
-def send_digest(config: Config, reviews: list[Review]) -> bool:
-    """Send the digest. Returns False (and sends nothing) if there's nothing new."""
-    if not reviews:
-        return False
-    if not config.digest_to:
-        raise RuntimeError("DIGEST_TO is not set; cannot send the digest.")
-
-    msg = build_message(config, reviews)
+def _send(config: Config, msg: EmailMessage) -> None:
     with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
         server.ehlo()
         if config.smtp_port == 587:
@@ -105,4 +98,37 @@ def send_digest(config: Config, reviews: list[Review]) -> bool:
         if config.smtp_username:
             server.login(config.smtp_username, config.smtp_password)
         server.send_message(msg)
+
+
+def send_digest(config: Config, reviews: list[Review]) -> bool:
+    """Send the good-review digest. Returns False if there's nothing to send."""
+    if not reviews:
+        return False
+    if not config.digest_to:
+        raise RuntimeError("DIGEST_TO is not set; cannot send the digest.")
+    _send(config, build_message(config, reviews))
+    return True
+
+
+def send_manager_alert(config: Config, reviews: list[Review]) -> bool:
+    """Send bad reviews straight to the manager for hands-on handling.
+
+    These are not auto-replied; the manager decides what to do. We still
+    include any draft for reference and the dashboard link.
+    """
+    if not reviews:
+        return False
+    if not config.manager_to:
+        raise RuntimeError("MANAGER_TO is not set; cannot alert the manager.")
+
+    msg = EmailMessage()
+    msg["Subject"] = f"⚠ Jolly Roger — {len(reviews)} review(s) need attention"
+    msg["From"] = config.digest_from
+    msg["To"] = config.manager_to
+    msg["Date"] = formatdate(localtime=True)
+    msg.set_content(render_text(reviews, config.dashboard_base_url))
+    msg.add_alternative(
+        render_html(reviews, config.dashboard_base_url), subtype="html"
+    )
+    _send(config, msg)
     return True

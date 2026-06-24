@@ -7,7 +7,7 @@ directly. Nothing in this module is logged.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 try:
@@ -34,7 +34,29 @@ def _require(name: str) -> str:
     return value
 
 
-@dataclass(frozen=True)
+def _int_env(name: str, default: int) -> int:
+    """Parse an integer env var, with a clear error instead of a stack trace."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise RuntimeError(
+            f"Environment variable {name!r} must be an integer, got {raw!r}."
+        )
+
+
+# Field names whose values must never be printed/logged.
+_SECRET_FIELDS = {
+    "anthropic_api_key",
+    "smtp_password",
+    "flask_secret_key",
+    "dashboard_password",
+}
+
+
+@dataclass(frozen=True, repr=False)
 class Config:
     # Anthropic
     anthropic_api_key: str
@@ -53,10 +75,27 @@ class Config:
     smtp_password: str
     digest_from: str
     digest_to: str
+    manager_to: str
+    bad_review_max_stars: int
+    example_count: int
     dashboard_base_url: str
+
+    # Dashboard auth (required to run the dashboard, not the poller)
+    flask_secret_key: str
+    dashboard_password: str
 
     # Storage
     database_path: str
+
+    def __repr__(self) -> str:
+        # Redact secrets so a stray log/print never leaks credentials.
+        parts = []
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if f.name in _SECRET_FIELDS and value:
+                value = "***"
+            parts.append(f"{f.name}={value!r}")
+        return f"Config({', '.join(parts)})"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -70,14 +109,19 @@ class Config:
             gbp_account_name=os.getenv("GBP_ACCOUNT_NAME", ""),
             gbp_location_name=os.getenv("GBP_LOCATION_NAME", ""),
             smtp_host=os.getenv("SMTP_HOST", "localhost"),
-            smtp_port=int(os.getenv("SMTP_PORT", "587")),
+            smtp_port=_int_env("SMTP_PORT", 587),
             smtp_username=os.getenv("SMTP_USERNAME", ""),
             smtp_password=os.getenv("SMTP_PASSWORD", ""),
             digest_from=os.getenv("DIGEST_FROM", "jolly-roger-bot@example.com"),
             digest_to=os.getenv("DIGEST_TO", ""),
+            manager_to=os.getenv("MANAGER_TO", ""),
+            bad_review_max_stars=_int_env("BAD_REVIEW_MAX_STARS", 2),
+            example_count=_int_env("EXAMPLE_COUNT", 5),
             dashboard_base_url=os.getenv(
                 "DASHBOARD_BASE_URL", "http://localhost:5000"
             ),
+            flask_secret_key=os.getenv("FLASK_SECRET_KEY", ""),
+            dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
             database_path=os.getenv("DATABASE_PATH", "jolly_roger.db"),
         )
 

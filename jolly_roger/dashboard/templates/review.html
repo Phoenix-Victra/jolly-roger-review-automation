@@ -17,6 +17,7 @@
 
   {% if review.status in ["new", "drafted"] %}
     <form method="post" action="{{ url_for('approve', review_id=review.review_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <p><strong>Suggested reply</strong> (edit before approving if you like):</p>
       <textarea name="reply">{{ review.draft_reply or "" }}</textarea>
       <p>
@@ -24,6 +25,7 @@
       </p>
     </form>
     <form method="post" action="{{ url_for('reject', review_id=review.review_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="reject" type="submit">Reject (no reply)</button>
     </form>
   {% else %}

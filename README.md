@@ -66,12 +66,21 @@ programmatic reply API.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env          # then fill in real values
+pip install -r requirements.txt          # runtime deps
+pip install -r requirements-dev.txt      # + pytest, for running tests
+cp .env.example .env                      # then fill in real values
 ```
 
 Put your Google OAuth **Desktop app** client secret JSON next to the project as
 `client_secret.json` (path configurable via `GOOGLE_CLIENT_SECRETS_FILE`).
+
+The dashboard requires two extra settings in `.env`:
+
+```bash
+# A long random string that signs the session cookie:
+python -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into FLASK_SECRET_KEY
+DASHBOARD_PASSWORD=...   # the password you'll type to sign in
+```
 
 ### Phase 1 — find your account & location
 
@@ -102,8 +111,26 @@ Wire that to cron on an always-on host (a poll every few hours is plenty):
 flask --app jolly_roger.dashboard.app run
 ```
 
-Open http://localhost:5000, review each draft, and Approve / Edit / Reject.
-Approval posts the reply to Google and records `final_reply` + `posted_at`.
+Open http://localhost:5000, sign in with `DASHBOARD_PASSWORD`, review each draft,
+and Approve / Edit / Reject. Approval posts the reply to Google and records
+`final_reply` + `posted_at` **only after Google confirms** — if posting fails the
+review stays in `drafted` and the error is shown. All forms are CSRF-protected
+and every route except login requires a signed-in session.
+
+## Review routing (this branch)
+
+New reviews are split on the way out:
+
+- **Bad reviews → the manager.** Any review at or below `BAD_REVIEW_MAX_STARS`
+  (default 2★), or one Claude flags as needing a human, is emailed straight to
+  `MANAGER_TO` for hands-on handling instead of going into the auto-approval
+  digest. A draft is still included for reference, but the manager decides.
+- **Good reviews → the owner digest, written in our own voice.** For higher-star
+  reviews, the drafter is given the last `EXAMPLE_COUNT` replies we actually
+  posted (from the DB) as few-shot examples, so new drafts match the style of
+  responses we've approved before rather than sounding generic.
+
+Set `MANAGER_TO`, `BAD_REVIEW_MAX_STARS`, and `EXAMPLE_COUNT` in `.env`.
 
 ## Data model (SQLite)
 
@@ -117,20 +144,41 @@ double-process or double-reply:
 
 ## Good practice baked in
 
-- **Never auto-post.** Human approval is mandatory.
+- **Never auto-post.** Human approval is mandatory; a review is marked `posted`
+  only after Google confirms the reply went through.
 - **Flag sensitive reviews** (1–2 star, illness, refunds, legal) so they never
-  get a canned-feeling reply.
-- **Don't overwrite an existing reply** — `post_reply` checks Google first.
-- **Secrets stay out of git** — `.env` and tokens are git-ignored.
+  get a canned-feeling reply. Drafting failures (API error, refusal, truncation,
+  bad JSON) also degrade to `needs_human` rather than crashing the poller.
+- **Don't overwrite or invent.** `post_reply` checks Google first: it refuses to
+  overwrite an existing reply and refuses to post to a review it can't find
+  remotely. Reviews that already have a reply are recorded as `skipped`.
+- **No stranded drafts.** A `notified` flag tracks whether a draft was emailed;
+  if SMTP fails, the next poll re-sends it (good → owner digest, bad → manager).
+- **Dashboard auth + CSRF** — password login over a signed session, CSRF tokens
+  on every form.
+- **Secrets stay out of git** — `.env` and tokens are git-ignored, and `Config`'s
+  repr redacts secrets so they can't leak into logs.
+
+## TODO / future
+
+- **Possible browser-automation fallback.** The Business Profile API is
+  access-gated (owner grant + Google approval of the access-request form, often
+  days). If approval is slow or denied, evaluate a headless-browser fallback
+  (e.g. Playwright) to read reviews and post approved replies through the
+  Business Profile web UI. Revisit once API access status is known — keep the
+  human-approval step regardless.
 
 ## Tests
 
 ```bash
-pip install pytest
+pip install -r requirements-dev.txt
 pytest
 ```
 
-Tests are fully mocked — no Google or Anthropic calls, no network.
+Tests are fully mocked — no Google, Anthropic, or SMTP calls, no network. They
+cover the DB, the poller (routing, dedupe, skip-already-replied, email retry,
+`post_reply` guards), drafting failure modes, and the dashboard (login required,
+CSRF, approve success, approve-failure-keeps-drafted, reject).
 
 ## Models
 

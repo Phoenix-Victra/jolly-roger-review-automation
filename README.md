@@ -64,6 +64,8 @@ programmatic reply API.
 
 ## Setup
 
+**Requires Python 3.10 or newer** (`python3 --version` to check).
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt          # runtime deps
@@ -92,6 +94,14 @@ python -m jolly_roger.cli discover
 
 Copy the printed `accounts/…` and `locations/…` names into `GBP_ACCOUNT_NAME`
 and `GBP_LOCATION_NAME` in `.env`.
+
+> **First-time Google login on a headless/always-on host.** The OAuth consent
+> step needs a browser. On a server or Raspberry Pi without one, run the login
+> **once on a laptop** (any machine with a browser), then copy the generated
+> `token.json` to the host next to the project. After that, the token refreshes
+> automatically and no browser is needed again. (The flow prints the auth URL
+> rather than forcing a browser launch, so an SSH session with port forwarding
+> can also work.)
 
 ### Phases 2–3 — poll, draft, and email
 

@@ -67,9 +67,11 @@ def _load_credentials(config: Config) -> Credentials:
             flow = InstalledAppFlow.from_client_secrets_file(
                 config.google_client_secrets_file, [GBP_SCOPE]
             )
-            # Opens a browser for one-time consent; headless hosts can use
-            # run_console() instead.
-            creds = flow.run_local_server(port=0)
+            # One-time consent. open_browser=False prints the auth URL instead
+            # of trying to launch a browser, which fails on headless hosts. For
+            # a truly headless box, run this once on a machine with a browser
+            # and copy the resulting token.json over (see the README).
+            creds = flow.run_local_server(port=0, open_browser=False)
         with open(token_path, "w", encoding="utf-8") as fh:
             fh.write(creds.to_json())
 

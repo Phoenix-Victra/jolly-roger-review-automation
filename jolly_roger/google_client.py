@@ -12,10 +12,13 @@ Business Profile API access request. See the README, Phase 0.
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Iterator, Optional
 
+import requests
 from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -23,9 +26,42 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from .config import GBP_SCOPE, Config
 from .db import Review
 
+log = logging.getLogger("jolly_roger.google_client")
+
 _V4_BASE = "https://mybusiness.googleapis.com/v4"
 _ACCOUNTS_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1"
 _INFO_BASE = "https://mybusinessbusinessinformation.googleapis.com/v1"
+
+# Status codes worth retrying — transient server/rate-limit conditions. A 4xx
+# like 403/404 is a real error and is NOT retried (it won't fix itself).
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_BACKOFFS = (2, 4, 8)  # seconds; len == number of retries after the first try
+
+
+def _request_with_retry(session, method, url, *, _sleep=time.sleep, **kwargs):
+    """Make an HTTP request, retrying transient failures with backoff.
+
+    Retries on connection errors and 429/5xx up to ``len(_BACKOFFS)`` times,
+    then raises. Non-retryable HTTP errors raise immediately via
+    ``raise_for_status``.
+    """
+    for attempt in range(len(_BACKOFFS) + 1):
+        try:
+            resp = session.request(method, url, **kwargs)
+        except requests.exceptions.RequestException as exc:
+            if attempt == len(_BACKOFFS):
+                raise
+            log.warning("Google request error (%s); retrying in %ss",
+                        exc, _BACKOFFS[attempt])
+            _sleep(_BACKOFFS[attempt])
+            continue
+        if resp.status_code in _RETRYABLE_STATUS and attempt < len(_BACKOFFS):
+            log.warning("Google returned %s; retrying in %ss",
+                        resp.status_code, _BACKOFFS[attempt])
+            _sleep(_BACKOFFS[attempt])
+            continue
+        resp.raise_for_status()
+        return resp
 
 # Google returns star ratings as an enum string.
 _STAR_MAP = {"ONE": 1, "TWO": 2, "THREE": 3, "FOUR": 4, "FIVE": 5}
@@ -83,12 +119,14 @@ class GoogleBusinessClient:
         self._config = config
         self._session = AuthorizedSession(_load_credentials(config))
 
+    def _req(self, method: str, url: str, **kwargs):
+        return _request_with_retry(self._session, method, url, **kwargs)
+
     # --- account / location discovery (Phase 1) -----------------------------
 
     def list_accounts(self) -> list[dict]:
         """Return the Business Profile accounts the authorized user can manage."""
-        resp = self._session.get(f"{_ACCOUNTS_BASE}/accounts")
-        resp.raise_for_status()
+        resp = self._req("GET", f"{_ACCOUNTS_BASE}/accounts")
         return resp.json().get("accounts", [])
 
     def list_locations(self, account_name: str) -> list[dict]:
@@ -100,8 +138,7 @@ class GoogleBusinessClient:
         }
         url = f"{_INFO_BASE}/{account_name}/locations"
         while True:
-            resp = self._session.get(url, params=params)
-            resp.raise_for_status()
+            resp = self._req("GET", url, params=params)
             body = resp.json()
             locations.extend(body.get("locations", []))
             token = body.get("nextPageToken")
@@ -131,8 +168,7 @@ class GoogleBusinessClient:
         url = f"{_V4_BASE}/{parent}/reviews"
         params = {"pageSize": 50}
         while True:
-            resp = self._session.get(url, params=params)
-            resp.raise_for_status()
+            resp = self._req("GET", url, params=params)
             body = resp.json()
             for raw in body.get("reviews", []):
                 yield self._parse_review(raw)
@@ -163,5 +199,4 @@ class GoogleBusinessClient:
         """
         parent = self._review_parent()
         url = f"{_V4_BASE}/{parent}/reviews/{review_id}/reply"
-        resp = self._session.put(url, json={"comment": comment})
-        resp.raise_for_status()
+        self._req("PUT", url, json={"comment": comment})

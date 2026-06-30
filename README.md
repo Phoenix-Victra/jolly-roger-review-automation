@@ -164,6 +164,8 @@ double-process or double-reply:
   remotely. Reviews that already have a reply are recorded as `skipped`.
 - **No stranded drafts.** A `notified` flag tracks whether a draft was emailed;
   if SMTP fails, the next poll re-sends it (good → owner digest, bad → manager).
+- **Resilient to Google hiccups.** Transient errors (429/5xx, dropped
+  connections) are retried with backoff; real errors (403/404) fail fast.
 - **Dashboard auth + CSRF** — password login over a signed session, CSRF tokens
   on every form.
 - **Secrets stay out of git** — `.env` and tokens are git-ignored, and `Config`'s

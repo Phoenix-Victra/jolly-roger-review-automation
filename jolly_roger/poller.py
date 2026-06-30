@@ -80,6 +80,16 @@ def run_poll(
         new_reviews.append(remote.to_db_review())
         log.info("new review %s (%d★)", remote.review_id, remote.star_rating)
 
+    # Cache Google's official overall rating + review count for the dashboard.
+    try:
+        summary = google.fetch_review_summary()
+        if summary:
+            avg, total = summary
+            db.set_meta("google_average_rating", str(avg))
+            db.set_meta("google_total_reviews", str(total))
+    except Exception as exc:  # noqa: BLE001 - summary is best-effort
+        log.warning("could not fetch review summary: %s", exc)
+
     # Past approved replies become few-shot examples so good-review drafts
     # match the voice we've already established.
     examples = db.list_examples(config.example_count) if config else []

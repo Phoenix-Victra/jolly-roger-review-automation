@@ -121,11 +121,27 @@ Wire that to cron on an always-on host (a poll every few hours is plenty):
 flask --app jolly_roger.dashboard.app run
 ```
 
-Open http://localhost:5000, sign in with `DASHBOARD_PASSWORD`, review each draft,
-and Approve / Edit / Reject. Approval posts the reply to Google and records
-`final_reply` + `posted_at` **only after Google confirms** — if posting fails the
-review stays in `drafted` and the error is shown. All forms are CSRF-protected
-and every route except login requires a signed-in session.
+Open http://localhost:5000, sign in with `DASHBOARD_PASSWORD`, and you land on the
+**Review Command** overview:
+
+- **Header:** the store's overall rating (Google's official number when available,
+  cached during the poll; otherwise the average of tracked reviews), review count,
+  a running-average trend sparkline, and KPIs (new today / ready to approve /
+  needs a human). The header figures auto-refresh every 60s via `/api/stats`;
+  "Check for new reviews" reloads the page.
+- **Newest reviews** — a feed of the most recent reviews pulled.
+- **Ready to approve** — good reviews with Claude's draft, ready to Approve / Reject.
+- **Needs a human** — low-star / flagged reviews (already emailed to the manager),
+  with the flag reason and a severity stripe; you can still write and post a reply.
+
+Approval posts the reply to Google and records `final_reply` + `posted_at` **only
+after Google confirms** — if posting fails the review stays in `drafted` and the
+error is shown. All forms are CSRF-protected and every route except login requires
+a signed-in session.
+
+> "Live" means *as fresh as the last poll* — Google doesn't push updates, so the
+> data changes when the cron poll runs (every few hours by default). The header
+> auto-refreshes those numbers; use the button to pull a full page refresh.
 
 ## Review routing (this branch)
 

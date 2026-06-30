@@ -20,6 +20,7 @@ from typing import Optional
 from flask import (
     Flask,
     abort,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -37,7 +38,7 @@ from ..db import (
     Database,
 )
 from ..google_client import GoogleBusinessClient
-from ..poller import post_reply
+from ..poller import _is_bad, post_reply
 
 
 def create_app(config: Optional[Config] = None, google=None) -> Flask:
@@ -118,11 +119,43 @@ def create_app(config: Optional[Config] = None, google=None) -> Flask:
 
     # --- review workflow ----------------------------------------------------
 
+    def _overview() -> dict:
+        """Shared snapshot used by the dashboard page and the live JSON feed."""
+        max_stars = config.bad_review_max_stars
+        drafted = db.list_by_status(STATUS_DRAFTED)
+        good = [r for r in drafted if not _is_bad(r, max_stars)]
+        bad = [r for r in drafted if _is_bad(r, max_stars)]
+        avg, total = db.rating_summary()
+        return {
+            "average": avg,
+            "total": total,
+            "new_today": db.count_new_today(),
+            "good": good,
+            "bad": bad,
+            "newest": db.list_recent(8),
+            "trend": db.rating_trend(14),
+        }
+
     @app.route("/")
     def index():
-        pending = db.list_by_status(STATUS_NEW, STATUS_DRAFTED)
+        ov = _overview()
         done = db.list_by_status(STATUS_POSTED, STATUS_REJECTED, STATUS_SKIPPED)
-        return render_template("index.html", pending=pending, done=done)
+        return render_template("index.html", ov=ov, done=done)
+
+    @app.route("/api/stats")
+    def api_stats():
+        """Lightweight JSON the page polls to keep the header numbers live."""
+        ov = _overview()
+        return jsonify(
+            {
+                "average": ov["average"],
+                "total": ov["total"],
+                "new_today": ov["new_today"],
+                "good": len(ov["good"]),
+                "bad": len(ov["bad"]),
+                "pending": len(ov["good"]) + len(ov["bad"]),
+            }
+        )
 
     @app.route("/review/<review_id>")
     def review_detail(review_id: str):

@@ -133,6 +133,44 @@ def test_reject_flow(tmp_path):
     assert db.get("r1").status == STATUS_REJECTED
 
 
+def test_index_renders_both_queues(tmp_path):
+    app, db, _ = build(tmp_path)
+    # one good (5★) and one flagged bad (1★)
+    db.insert_new(Review("g1", "Marisol", 5, "Loved the sunset deck", "2026-06-09T00:00:00Z"))
+    db.save_draft("g1", "Thanks Marisol!", needs_human=False, flag_reason=None)
+    db.insert_new(Review("b1", "Karen", 1, "Felt sick after the oysters", "2026-06-09T00:00:00Z"))
+    db.save_draft("b1", "", needs_human=True, flag_reason="mentions illness")
+
+    client = app.test_client()
+    login(client)
+    html = client.get("/").get_data(as_text=True)
+    assert "Ready to approve" in html and "Needs a human" in html
+    assert "Marisol" in html and "Karen" in html
+    assert "mentions illness" in html  # flag reason surfaced
+
+
+def test_api_stats_counts(tmp_path):
+    app, db, _ = build(tmp_path)
+    db.insert_new(Review("g1", "Marisol", 5, "great", "2026-06-09T00:00:00Z"))
+    db.save_draft("g1", "Thanks!", needs_human=False, flag_reason=None)
+    db.insert_new(Review("b1", "Karen", 1, "bad", "2026-06-09T00:00:00Z"))
+    db.save_draft("b1", "", needs_human=True, flag_reason="illness")
+
+    client = app.test_client()
+    login(client)
+    data = client.get("/api/stats").get_json()
+    assert data["good"] == 1
+    assert data["bad"] == 1
+    assert data["pending"] == 2
+    assert data["total"] == 2
+
+
+def test_api_stats_requires_login(tmp_path):
+    app, _, _ = build(tmp_path)
+    resp = app.test_client().get("/api/stats")
+    assert resp.status_code == 302  # redirected to login
+
+
 def test_missing_secret_key_raises(tmp_path):
     with pytest.raises(RuntimeError, match="FLASK_SECRET_KEY"):
         create_app(make_config(tmp_path, flask_secret_key=""))

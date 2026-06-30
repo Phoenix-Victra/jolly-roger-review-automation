@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews(status);
+
+-- Small key/value store for things like Google's official overall rating and
+-- review count, cached from the last poll.
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -180,6 +187,88 @@ class Database:
                 "SELECT * FROM reviews ORDER BY created_at DESC"
             )
             return [Review.from_row(r) for r in cur.fetchall()]
+
+    def list_recent(self, limit: int = 8) -> list[Review]:
+        """Most recently created reviews (any status), newest first."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT * FROM reviews ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+            return [Review.from_row(r) for r in cur.fetchall()]
+
+    # --- dashboard stats -----------------------------------------------------
+
+    def rating_summary(self) -> tuple[Optional[float], int]:
+        """(average_rating, review_count).
+
+        Prefers Google's official numbers cached in `meta` (set during a poll);
+        falls back to the average of the reviews we've stored locally.
+        """
+        official_avg = self.get_meta("google_average_rating")
+        official_total = self.get_meta("google_total_reviews")
+        if official_avg and official_total:
+            try:
+                return round(float(official_avg), 1), int(official_total)
+            except ValueError:
+                pass
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT AVG(star_rating) AS avg, COUNT(*) AS n FROM reviews "
+                "WHERE star_rating > 0"
+            ).fetchone()
+        avg = round(row["avg"], 1) if row["avg"] is not None else None
+        return avg, row["n"]
+
+    def count_new_today(self) -> int:
+        """Reviews first seen by us today (uses our local insert time)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM reviews "
+                "WHERE date(inserted_at) = date('now')"
+            ).fetchone()
+            return row["n"]
+
+    def rating_trend(self, points: int = 14) -> list[float]:
+        """Cumulative average rating across reviews in chronological order.
+
+        Returns up to ``points`` samples showing how the running average has
+        moved — a smooth line suitable for a sparkline.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT star_rating FROM reviews WHERE star_rating > 0 "
+                "ORDER BY created_at ASC"
+            ).fetchall()
+        ratings = [r["star_rating"] for r in rows]
+        if not ratings:
+            return []
+        running, total = [], 0
+        for i, val in enumerate(ratings, start=1):
+            total += val
+            running.append(round(total / i, 3))
+        if len(running) <= points:
+            return running
+        # Sample evenly down to `points` values, keeping the latest.
+        step = (len(running) - 1) / (points - 1)
+        return [running[round(i * step)] for i in range(points)]
+
+    # --- meta key/value ------------------------------------------------------
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    def get_meta(self, key: str) -> Optional[str]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (key,)
+            ).fetchone()
+            return row["value"] if row else None
 
     # --- writes --------------------------------------------------------------
 

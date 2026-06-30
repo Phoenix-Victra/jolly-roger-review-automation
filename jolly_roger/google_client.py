@@ -177,6 +177,21 @@ class GoogleBusinessClient:
                 break
             params["pageToken"] = token
 
+    def fetch_review_summary(self) -> Optional[tuple[float, int]]:
+        """Return Google's (averageRating, totalReviewCount) for the location.
+
+        These come back at the top level of the v4 reviews list response.
+        Best-effort: returns None if unavailable so it never blocks a poll.
+        """
+        parent = self._review_parent()
+        resp = self._req("GET", f"{_V4_BASE}/{parent}/reviews", params={"pageSize": 1})
+        body = resp.json()
+        avg = body.get("averageRating")
+        total = body.get("totalReviewCount")
+        if avg is None or total is None:
+            return None
+        return float(avg), int(total)
+
     @staticmethod
     def _parse_review(raw: dict) -> RemoteReview:
         reviewer = raw.get("reviewer", {})
